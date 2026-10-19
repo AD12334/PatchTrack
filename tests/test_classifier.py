@@ -72,29 +72,42 @@ def test_classify_patch():
 
 
 def test_find_hunk_matches_w_important_hash_match_and_nonmatch():
-    # source_hashes contains an ngram 'x' with associated hash list ['hlist']
-    source_hashes = [('x', ['hlist'])]
+    bloom_size = common.bloomfilter_size
+    x_hashes = [
+        common.fnv1a_hash('x'),
+        common.djb2_hash('x'),
+        common.sdbm_hash('x'),
+    ]
+    y_hashes = [
+        common.fnv1a_hash('y'),
+        common.djb2_hash('y'),
+        common.sdbm_hash('y'),
+    ]
+    x_masked_hashes = [value & (bloom_size - 1) for value in x_hashes]
+    source_hashes = [('x', x_masked_hashes)]
     important_hashes = [['x']]
-    # match_items uses keys that will be converted to the seq hash_list ['hlist']
-    match_items = {0: {0: {'hlist': True}, 1: {'other': True}}}
+    match_items = {
+        0: {
+            0: {value: True for value in x_hashes},
+            1: {value: True for value in y_hashes},
+        }
+    }
 
     res = classifier.find_hunk_matches_w_important_hash(match_items, 'MO', important_hashes, source_hashes)
-    # seq 0 should be marked important because its hash_list ['hlist'] is present in test
     assert res[0]['sequences'][0]['important'] is True
-    # seq 1 should not be important
     assert res[0]['sequences'][1]['important'] is False
     assert res[0]['class'] in ('MO', 'MC')
 
 
 def test_cal_similarity_ratio_basic():
     source_hashes = [('a', [1]), ('b', [2]), ('c', [3])]
-    added_lines_hashes = [[['a'], ['x']], [['b']]]
+    added_lines_hashes = [['a', 'x'], ['b']]
     per = classifier.cal_similarity_ratio(source_hashes, added_lines_hashes)
     assert per == pytest.approx((2 / 3) * 100)
 
 
 def test_cal_similarity_ratio_empty_source():
-    assert classifier.cal_similarity_ratio([], [[['a']]]) == 0.0
+    assert classifier.cal_similarity_ratio([], [['a']]) == 0.0
 
 
 def test_process_patch_monkeypatched(monkeypatch):

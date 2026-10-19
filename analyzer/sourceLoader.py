@@ -100,8 +100,8 @@ class SourceLoader:
             Normalized source (lowercase, no comments, minimal whitespace).
         """
         source_no_comments = helpers.remove_comments(source, file_ext)
-        # Remove whitespaces except newlines
-        source_compact = common.WHITESPACE_REGEX.sub("", source_no_comments)
+        # Keep token boundaries consistent with the patch-side normalizer.
+        source_compact = common.WHITESPACE_REGEX.sub(" ", source_no_comments).strip()
         # Convert to lowercase
         return source_compact.lower()
 
@@ -134,7 +134,7 @@ class SourceLoader:
                     num_ngram_processed = 0
                     self._bit_vector.setall(0)
 
-                ngram = ''.join(tokens[i : i + common.ngram_size])
+                ngram = ' '.join(tokens[i : i + common.ngram_size])
                 hash1 = common.fnv1a_hash(ngram) & (common.bloomfilter_size - 1)
                 hash2 = common.djb2_hash(ngram) & (common.bloomfilter_size - 1)
                 hash3 = common.sdbm_hash(ngram) & (common.bloomfilter_size - 1)

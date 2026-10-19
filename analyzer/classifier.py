@@ -142,21 +142,20 @@ def classify_patch(hunk_classifications: List[str]) -> str:
     return final_class
 
 
-def find_hunk_matches_w_important_hash(match_items: Dict[Any, Any], _type: str, important_hashes: List[Any], source_hashes: List[Tuple[Any, Any]]) -> Dict[Any, Any]:
+def find_hunk_matches_w_important_hash(match_items: Dict[Any, Any], _type: str, important_hashes: List[List[str]], source_hashes: List[Tuple[str, List[int]]]) -> Dict[Any, Any]:
     """Find hunk matches using important hashes feature.
 
     Preserves original behavior and return structure.
     """
     seq_matches: Dict[Any, Any] = {}
-    test: List[Any] = []
-    for lines in important_hashes:
-        for line in lines:
-            for each in line:
-                for ngram, hash_list in source_hashes:
-                    if each in ngram:
-                        test.append(hash_list)
+    important_tokens = {token for line in important_hashes for token in line}
+    bloomfilter_mask = common.bloomfilter_size - 1
+    important_source_hashes = {
+        tuple(hash_list)
+        for ngram, hash_list in source_hashes
+        if important_tokens.intersection(ngram.split())
+    }
 
-    important_hash_match = 0
     for patch_nr in match_items:
         match_bool = False
         seq_matches[patch_nr] = {'sequences': {}, 'class': ''}
@@ -166,9 +165,12 @@ def find_hunk_matches_w_important_hash(match_items: Dict[Any, Any], _type: str, 
                 'hash_list': list(match_items[patch_nr][patch_seq].keys())
             }
 
-            if seq_matches[patch_nr]['sequences'][patch_seq]['hash_list'] in test:
+            masked_hashes = tuple(
+                hash_value & bloomfilter_mask
+                for hash_value in seq_matches[patch_nr]['sequences'][patch_seq]['hash_list']
+            )
+            if masked_hashes in important_source_hashes:
                 seq_matches[patch_nr]['sequences'][patch_seq]['important'] = True
-                important_hash_match += 1
                 match_bool = True
             else:
                 seq_matches[patch_nr]['sequences'][patch_seq]['important'] = False
@@ -182,24 +184,17 @@ def find_hunk_matches_w_important_hash(match_items: Dict[Any, Any], _type: str, 
     return seq_matches
 
 
-def cal_similarity_ratio(source_hashes: List[Tuple[Any, Any]], added_lines_hashes: List[List[List[Any]]]) -> float:
+def cal_similarity_ratio(source_hashes: List[Tuple[str, List[int]]], added_lines_hashes: List[List[str]]) -> float:
     """Calculate similarity ratio between source hashes and added lines hashes.
     """
-    count_matches: List[Any] = []
-
-    for lines in added_lines_hashes:
-        for line in lines:
-            for each in line:
-                for ngram, hash_list in source_hashes:
-                    if each == ngram:
-                        count_matches.append(ngram)
-
-    s_hashes: List[Any] = [ngram for ngram, _ in source_hashes]
-
-    try:
-        unique_matches = list(set(count_matches))
-        unique_source_hashes = list(set(s_hashes))
-        per = (len(unique_matches) / len(unique_source_hashes)) * 100
-        return per
-    except Exception:
+    added_tokens = {token for line in added_lines_hashes for token in line}
+    source_ngrams = {ngram for ngram, _ in source_hashes}
+    if not source_ngrams:
         return 0.0
+
+    matching_ngrams = {
+        ngram
+        for ngram in source_ngrams
+        if added_tokens.intersection(ngram.split())
+    }
+    return (len(matching_ngrams) / len(source_ngrams)) * 100

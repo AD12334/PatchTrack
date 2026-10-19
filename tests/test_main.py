@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from analyzer.main import PatchTrack, DEFAULT_DATA_DIR
-from analyzer import common, helpers, patchLoader, sourceLoader
+from analyzer import common, constant, helpers, patchLoader, sourceLoader
 
 
 def test_patchtrack_init_and_setters():
@@ -64,6 +64,34 @@ def test_patch_files_with_undefined_windows_bytes_are_readable(tmp_path, monkeyp
     buggy_loader.traverse(str(buggy_path), "buggy", common.FileExt.Python)
 
     assert buggy_loader.length() == 1
+
+
+@pytest.mark.parametrize("ngram_size", [1, 2])
+def test_process_patch_pair_detects_added_code_in_source(tmp_path, monkeypatch, ngram_size):
+    monkeypatch.setattr(constant, "NGRAM_SIZE", ngram_size)
+    source_path = tmp_path / "test.js"
+    patch_path = tmp_path / "patch-1.patch"
+    source_path.write_text("const answer = 42;\n", encoding="latin-1")
+    patch_path.write_text(
+        "diff --git a/test.js b/test.js\n"
+        "--- a/test.js\n"
+        "+++ b/test.js\n"
+        "@@ -1 +1 @@\n"
+        "-const answer = 41;\n"
+        "+const answer = 42;\n",
+        encoding="latin-1",
+    )
+
+    result = PatchTrack([])._process_patch_pair(
+        str(source_path),
+        str(patch_path),
+        common.FileExt.JavaScript,
+        "1",
+        "owner/repo",
+    )
+
+    assert result is not None
+    assert result["patchClass"] == "PA"
 
 
 def test__process_missing_chatgpt_dir_fields():
