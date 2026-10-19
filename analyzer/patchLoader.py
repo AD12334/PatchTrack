@@ -124,7 +124,7 @@ class PatchLoader:
             file_type: File extension type index.
         """
         patch_filename = os.path.basename(patch_path)
-        with open(patch_path, 'r') as f:
+        with open(patch_path, 'r', encoding='latin-1') as f:
             patch_lines = f.readlines()
 
         diff_file = re.sub(r'\.patch$', '', patch_path)
@@ -182,7 +182,7 @@ class PatchLoader:
             file_type: File extension type index.
         """
         patch_filename = os.path.basename(patch_path)
-        with open(patch_path, 'r') as f:
+        with open(patch_path, 'r', encoding='latin-1') as f:
             patch_lines = f.readlines()
 
         diff_file = re.sub(r'\.patch$', '', patch_path)

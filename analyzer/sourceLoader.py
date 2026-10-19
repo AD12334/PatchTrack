@@ -83,7 +83,7 @@ class SourceLoader:
             source_path: Path to the source file.
             magic_ext: File extension type index.
         """
-        with open(source_path, 'r') as source_file:
+        with open(source_path, 'r', encoding='latin-1') as source_file:
             source_orig_lines = source_file.read()
 
         source_norm_lines = self._normalize(source_orig_lines, magic_ext)
@@ -156,7 +156,7 @@ class SourceLoader:
         hash_list_old = self._patch_list[patch_id].get('old_norm_lines', [])
         is_match = True
         for h in hash_list_old:
-            if not self._bit_vector[h]:
+            if not self._bit_vector[h & (common.bloomfilter_size - 1)]:
                 is_match = False
                 break
         if is_match:
@@ -185,7 +185,7 @@ class SourceLoader:
             if seq not in self._match_dict[patch_id]:
                 self._match_dict[patch_id][seq] = {}
 
-            is_match = bool(self._bit_vector[h])
+            is_match = bool(self._bit_vector[h & (common.bloomfilter_size - 1)])
             self._results[h] = {'Match': is_match}
             self._match_dict[patch_id][seq][h] = is_match
             i += 1

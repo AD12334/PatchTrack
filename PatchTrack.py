@@ -14,7 +14,7 @@ def install_os_dependencies() -> None:
     install_cmds = {
         'Darwin': ['brew', 'install', 'libmagic'],
         'Linux': ['apt', 'install', 'libmagic-dev'],
-        'Windows': ['apt', 'install', 'libmagic-dev'],
+        'Windows': None,
     }
     cmd = install_cmds.get(platform.system())
     if cmd:

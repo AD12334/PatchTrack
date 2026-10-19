@@ -27,7 +27,8 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
+from unittest import result
 
 import pandas as pd
 
@@ -120,8 +121,16 @@ class PatchTrack:
         level = logging.INFO if mode else logging.WARNING
         self.logger.setLevel(level)
 
+    def _ensure_dataframes(self) -> None:
+        """Build cached DataFrames from the latest classification results when needed."""
+        if self.df_patches is not None and self.df_files_classes is not None and self.df_patch_classes is not None:
+            return
+        if self.result_dict:
+            self.create_dataframes()
+
     def get_df_patches(self, num_rows: int = -1) -> Optional[pd.DataFrame]:
         """Get patches dataframe, optionally limited to num_rows."""
+        self._ensure_dataframes()
         if self.df_patches is None:
             return None
         if num_rows == -1:
@@ -132,6 +141,7 @@ class PatchTrack:
 
     def get_df_file_classes(self, num_rows: int = -1) -> Optional[pd.DataFrame]:
         """Get file classifications dataframe, optionally limited to num_rows."""
+        self._ensure_dataframes()
         if self.df_files_classes is None:
             return None
         if num_rows == -1:
@@ -142,6 +152,7 @@ class PatchTrack:
 
     def get_df_patch_classes(self, num_rows: int = -1) -> Optional[pd.DataFrame]:
         """Get patch classifications dataframe, optionally limited to num_rows."""
+        self._ensure_dataframes()
         if self.df_patch_classes is None:
             return None
         if num_rows == -1:
@@ -360,14 +371,22 @@ class PatchTrack:
         """
         self.logger.info("Building PR <> Project Pair...")
         result = []
-        
+
+        patch_root = os.path.normcase(os.path.abspath(self.repo_dir_files))
         for root, dirs, _ in os.walk(self.repo_dir_files):
-            depth = root[len(self.repo_dir_files):].count(os.sep)
-            if depth == 1:
-                for dir_name in dirs:
-                    full_path = os.path.join(root, dir_name)
-                    parts = full_path.split('/')
-                    result.append({parts[-1]: f'{parts[-3]}/{parts[-2]}'})
+            dirs[:] = [
+                name for name in dirs
+                if not name.startswith('.') and name != '__MACOSX'
+            ]
+            if os.path.normcase(os.path.abspath(root)) == patch_root:
+                continue
+
+            relative_path = os.path.relpath(root, patch_root)
+            pull_requests = sorted(name for name in dirs if name.isdigit())
+            if pull_requests:
+                project = relative_path.replace(os.sep, '/')
+                result.extend({pr: project} for pr in pull_requests)
+                dirs[:] = []
 
         self.logger.info("Building PR <> Project Pair......COMPLETED!")
         return result
@@ -410,7 +429,9 @@ class PatchTrack:
             'patchPath': patch_file_path,
             'destLOC': 0,
             'patchLOC': 0,
-            'PrLink': f'{GITHUB_WEB_BASE}/{project}/pull/{pr_nr}'
+            'PrLink': f'{GITHUB_WEB_BASE}/{project}/pull/{pr_nr}',
+            'pullRequest': pr_nr,
+            'project': project
         }
         result.append(result_item)
         return result
@@ -434,8 +455,10 @@ class PatchTrack:
                     'patchPath': patch_file_path,
                     'patchLOC': patch_loc,
                     'PrLink': f'{GITHUB_WEB_BASE}/{project}/pull/{pr_nr}',
-                    'type': 'N/A'
-                }
+                        'pullRequest': pr_nr,
+                        'project': project,
+                        'type': 'N/A'
+                    }
 
             common.ngram_size = 1
             patch_loader_obj, source_loader_obj = classifier.process_patch(patch_file_path, text_file_path, 'patch', file_ext)
@@ -459,6 +482,8 @@ class PatchTrack:
                 'patchPath': patch_file_path,
                 'patchLOC': patch_loc,
                 'PrLink': f'{GITHUB_WEB_BASE}/{project}/pull/{pr_nr}',
+                'pullRequest': pr_nr,
+                'project': project,
                 'similarityRatio': round(similarity_ratio, 2),
                 'hunkMatches': hunk_matches,
                 'patchClass': classifier.classify_patch(hunk_classes)
@@ -468,38 +493,61 @@ class PatchTrack:
             self.logger.error(f'Error processing patch pair: {e}')
             return None
 
-    def classify(self, pr_project_pair: Dict[str, str]) -> None:
+    def classify(
+        self,
+        pr_project_pair: Union[Dict[str, str], List[Tuple[str, str]]]
+    ) -> None:
         """Classify patches for all PRs.
 
         Args:
-            pr_project_pair: Mapping of PR numbers to projects.
+            pr_project_pair: Mapping of PR numbers to projects, or a list of
+                (PR number, project) pairs when PR numbers may repeat.
         """
         self.logger.info(f'Starting classification for {self.main_line} -> {self.variant}...')
         start_time = time.time()
 
-        for pr_nr, project in pr_project_pair.items():
-            root_directory = f'{self.repo_dir_files}{project}/'
-            chatgpt_dir = f'{root_directory}{pr_nr}/chatgpt/'
-            github_dir = f'{root_directory}{pr_nr}/github/'
+        pairs = list(pr_project_pair.items()) if isinstance(pr_project_pair, dict) else pr_project_pair
+        for pr_nr, project in pairs:
+            result_key = pr_nr if isinstance(pr_project_pair, dict) else f'{project}#/{pr_nr}'
+            root_directory = os.path.join(self.repo_dir_files, project)
+            chatgpt_dir = os.path.join(root_directory, pr_nr, 'chatgpt')
+            github_dir = os.path.join(root_directory, pr_nr, 'github')
 
-            self.result_dict[pr_nr] = {}
+            self.result_dict[result_key] = {}
+            if not os.path.isdir(github_dir):
+                self.logger.warning(
+                    f"Skipping PR {pr_nr} ({project}): GitHub patch directory not found: {github_dir}"
+                )
+                continue
+
+            github_files = sorted(
+                filename for filename in os.listdir(github_dir)
+                if not filename.startswith('.') and os.path.isfile(os.path.join(github_dir, filename))
+            )
+            if not github_files:
+                self.logger.warning(
+                    f"Skipping PR {pr_nr} ({project}): no GitHub patch files found in {github_dir}"
+                )
+                continue
 
             if not os.path.exists(chatgpt_dir):
-                github_files = [f for f in os.listdir(github_dir) if not f.startswith('.')]
-                patch_path = f'{github_dir}{github_files[0]}'
-                self.result_dict[pr_nr][patch_path] = {
+                patch_path = os.path.join(github_dir, github_files[0])
+                self.result_dict[result_key][patch_path] = {
                     'result': self._process_missing_chatgpt_dir(pr_nr, project, patch_path)
                 }
                 continue
 
             try:
-                chatgpt_files = [f for f in os.listdir(chatgpt_dir) if not f.startswith('.')]
-                github_files = [f for f in os.listdir(github_dir) if not f.startswith('.')]
+                chatgpt_files = sorted(
+                    filename for filename in os.listdir(chatgpt_dir)
+                    if not filename.startswith('.')
+                    and os.path.isfile(os.path.join(chatgpt_dir, filename))
+                )
 
                 for text_file in chatgpt_files:
                     text_path = os.path.join(chatgpt_dir, text_file)
                     file_ext = helpers.get_file_type(text_path)
-                    self.result_dict[pr_nr][text_path] = {}
+                    self.result_dict[result_key][text_path] = {}
                     result_list: List[Dict[str, Any]] = []
 
                     for patch_file in github_files:
@@ -514,27 +562,41 @@ class PatchTrack:
                                 'destLOC': helpers.count_loc(text_path),
                                 'patchPath': patch_path,
                                 'patchLOC': helpers.count_loc(patch_path),
-                                'PrLink': f'{GITHUB_WEB_BASE}/{project}/pull/{pr_nr}'
+                                'PrLink': f'{GITHUB_WEB_BASE}/{project}/pull/{pr_nr}',
+                                'pullRequest': pr_nr,
+                                'project': project
                             }
                         result_list.append(result)
 
-                    self.result_dict[pr_nr][text_path]['result'] = result_list
+                    self.result_dict[result_key][text_path]['result'] = result_list
 
             except Exception as e:
                 self.logger.error(f"Error processing PR {pr_nr}: {e}")
 
-        self.pr_classifications = aggregator.final_class(self.result_dict)
-        _ = aggregator.count_all_classifications(self.pr_classifications)
+        pr_classification_list = aggregator.final_class(self.result_dict)
+        self.pr_classifications = {
+            pr_id: pr_data for pr_result in pr_classification_list for pr_id, pr_data in pr_result.items()
+        }
+        _ = aggregator.count_all_classifications(pr_classification_list)
 
         duration = time.time() - start_time
         self.logger.info(f'Classification finished.')
         self.logger.info(f'Classification Runtime: {duration:.2f}s')
 
-        common.pickleFile(f"{self.main_dir_results}_{self.main_line}_results", 
-                         [self.result_dict, self.pr_classifications, _, duration])
+        result_path = f"{self.main_dir_results}_{self.main_line}_results"
+        result_directory = os.path.dirname(result_path)
+        if result_directory:
+            os.makedirs(result_directory, exist_ok=True)
+        common.pickle_file(
+            result_path,
+            [self.result_dict, self.pr_classifications, _, duration]
+        )
             
 
-    def run_classification(self, pr_project_pairs: Dict[str, str]) -> None:
+    def run_classification(
+        self,
+        pr_project_pairs: Union[Dict[str, str], List[Tuple[str, str]]]
+    ) -> None:
         """Run full classification pipeline.
 
         Args:
@@ -552,15 +614,23 @@ class PatchTrack:
         patch_results: List[List[Any]] = []
 
         for pr, files_dict in self.result_dict.items():
+            repo_name = ''
+            pr_classification = self.pr_classifications[pr] if pr in self.pr_classifications else {}
+            if pr_classification:
+                repo_name = pr_classification.get('project', '')
+
             for file_path, file_data in files_dict.items():
                 for item in file_data['result']:
                     is_interesting = 1 if item.get('patchClass') == CLASS_PATCH_APPLIED else 0
                     patch_type = item.get('type', 'None')
-                    
+                    repo_name_for_item = item.get('project', repo_name)
+                    display_pr = item.get('pullRequest', pr)
+
                     file_results.append([
                         self.main_line,
                         self.variant,
-                        pr,
+                        display_pr,
+                        repo_name_for_item,
                         file_path,
                         item.get('PrLink', ''),
                         item.get('destLOC', 0),
@@ -576,19 +646,21 @@ class PatchTrack:
                 if file_data['result']:
                     pr_class = self.pr_classifications[pr]['class']
                     pr_interesting = 1 if pr_class == CLASS_PATCH_APPLIED else 0
+                    first_result = file_data['result'][0]
                     patch_results.append([
                         self.main_line,
                         self.variant,
-                        pr,
-                        file_data['result'][0].get('PrLink', ''),
+                        first_result.get('pullRequest', pr),
+                        first_result.get('project', repo_name),
+                        first_result.get('PrLink', ''),
                         pr_class,
                         pr_interesting
                     ])
 
-        columns_files = ['GitHub', 'ChatGPT', 'Pull Request', 'File Path', 'PR Link',
+        columns_files = ['GitHub', 'ChatGPT', 'Pull Request', 'Repo', 'File Path', 'PR Link',
                         'ChatGPT LOC', 'GitHub Patch Path', 'GitHub LOC', 'Operation',
                         'Similarity (%)', 'File Classification', 'Interesting']
-        columns_patches = ['GitHub', 'ChatGPT', 'Pull Request', 'PR Link',
+        columns_patches = ['GitHub', 'ChatGPT', 'Pull Request', 'Repo', 'PR Link',
                           'Patch Classification', 'Interesting']
 
         self.df_files_classes = pd.DataFrame(file_results, columns=columns_files)
@@ -598,6 +670,7 @@ class PatchTrack:
         self.df_patch_classes = pd.DataFrame(patch_results, columns=columns_patches)
         self.df_patch_classes = self.df_patch_classes.sort_values(
             by='Interesting', ascending=False)
+        self.df_patches = self.df_patch_classes.copy()
 
     def print_results(self) -> None:
         """Print classification results in human-readable format."""

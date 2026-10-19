@@ -13,7 +13,7 @@ from . import common
 from . import constant
 
 
-def process_patch(patch_path: str, dst_path: str, type_patch: str, file_ext: str) -> Tuple[Any, Any]:
+def process_patch(patch_path: str, dst_path: str, type_patch: str, file_ext: int) -> Tuple[Any, Any]:
     """Process a patch and its corresponding source traversal.
 
     This wraps `PatchLoader.traverse` and `SourceLoader.traverse`, preserving
@@ -31,16 +31,10 @@ def process_patch(patch_path: str, dst_path: str, type_patch: str, file_ext: str
     common.ngram_size = constant.NGRAM_SIZE
 
     patch = patch_loader.PatchLoader()
-    try:
-        _ = patch.traverse(patch_path, type_patch, file_ext)
-    except Exception as e:
-        print("Error traversing patch:....", e)
+    patch.traverse(patch_path, type_patch, file_ext)
 
     source = source_loader.SourceLoader()
-    try:
-        _ = source.traverse(dst_path, patch, file_ext)
-    except Exception as e:
-        print("Error traversing source (variant)....", e)
+    source.traverse(dst_path, patch, file_ext)
 
     return patch, source
 

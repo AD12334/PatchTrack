@@ -368,5 +368,5 @@ def count_loc(file_path: str) -> int:
     Returns:
         Total number of lines in the file.
     """
-    with open(file_path, 'r') as f:
+    with open(file_path, 'r', encoding='latin-1') as f:
         return sum(1 for _ in f)

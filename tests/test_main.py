@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from analyzer.main import PatchTrack, DEFAULT_DATA_DIR
-from analyzer import common
+from analyzer import common, helpers, patchLoader, sourceLoader
 
 
 def test_patchtrack_init_and_setters():
@@ -44,6 +44,28 @@ def test_read_file_and_compare(tmp_path):
     assert 0 < ratio <= 1
 
 
+def test_patch_files_with_undefined_windows_bytes_are_readable(tmp_path, monkeypatch):
+    monkeypatch.setattr(common, "ngram_size", common.ngram_size)
+    patch_path = tmp_path / "patch.patch"
+    patch_path.write_bytes(
+        b"@@ -1 +1 @@\n-old\n+value = '\x81'\n"
+    )
+
+    assert helpers.count_loc(str(patch_path)) == 3
+
+    loader = patchLoader.PatchLoader()
+    loader.traverse(str(patch_path), "patch", common.FileExt.Python)
+
+    assert loader.length() == 1
+
+    buggy_path = tmp_path / "buggy.patch"
+    buggy_path.write_bytes(b"@@ -1 +1 @@\n-old = '\x81'\n")
+    buggy_loader = patchLoader.PatchLoader()
+    buggy_loader.traverse(str(buggy_path), "buggy", common.FileExt.Python)
+
+    assert buggy_loader.length() == 1
+
+
 def test__process_missing_chatgpt_dir_fields():
     pt = PatchTrack([])
     res = pt._process_missing_chatgpt_dir('5', 'owner/repo', 'some/path')
@@ -62,13 +84,14 @@ def test_build_pr_project_pairs(tmp_path):
     child = 'github'
 
     (base / project / pr / child).mkdir(parents=True)
+    (base / '__MACOSX' / project / pr / child).mkdir(parents=True)
 
     pt = PatchTrack([])
     pt.set_repo_dir_files(base_dir)
 
     pairs = pt.build_pr_project_pairs()
     # Expect one mapping: {child: 'projX/123'}
-    assert any(list(x.values())[0] == f'{project}/{pr}' for x in pairs)
+    assert pairs == [{pr: project}]
 
 
 def test_classify_missing_chatgpt_dir_creates_not_existing(tmp_path, monkeypatch):
@@ -86,7 +109,7 @@ def test_classify_missing_chatgpt_dir_creates_not_existing(tmp_path, monkeypatch
     pt.set_repo_dir_files(base_dir)
 
     # Prevent writing pickle in classify (create attribute if missing)
-    monkeypatch.setattr(common, 'pickleFile', lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(common, 'pickle_file', lambda *a, **k: None)
 
     # Patch aggregator.final_class to accept dict input (main.classify passes a dict)
     from analyzer import aggregator
@@ -109,3 +132,27 @@ def test_classify_missing_chatgpt_dir_creates_not_existing(tmp_path, monkeypatch
     first_key = keys[0]
     results = pt.result_dict[pr][first_key]['result']
     assert results[0]['patchClass'] == 'NOT EXISTING'
+
+
+def test_build_pr_project_pairs_ignores_macos_metadata(tmp_path):
+    base = tmp_path / 'repo_files'
+    (base / '__MACOSX' / 'owner' / 'repo' / '7' / 'github').mkdir(parents=True)
+    (base / 'owner' / 'repo' / '7' / 'github').mkdir(parents=True)
+
+    pt = PatchTrack([])
+    pt.set_repo_dir_files(str(base))
+
+    assert pt.build_pr_project_pairs() == [{'7': 'owner/repo'}]
+
+
+def test_source_loader_masks_hashes_before_bitarray_lookup():
+    loader = sourceLoader.SourceLoader()
+    loader._patch_list = [
+        common.PatchInfo(
+            'patch', common.FileExt.Python, '', [], [0xFFFFFFFF], [], 1
+        )
+    ]
+
+    loader._check_patch_hashes(0)
+
+    assert list(loader.results().values()) == [{'Match': False}]

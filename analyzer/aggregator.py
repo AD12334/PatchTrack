@@ -95,15 +95,21 @@ def final_class(result_dict: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     - Otherwise, most frequent of CC/NE/ERROR
 
     Args:
-        result_dict: List of dictionaries containing per-file analysis results.
-                    Format: [{pr_id: {file: {result: [item, ...]}, ...}}, ...]
+        result_dict: Mapping or list of dictionaries containing per-file analysis results.
+                    Format: {pr_id: {file: {result: [item, ...]}, ...}}
+                    or [{pr_id: {file: {result: [item, ...]}, ...}}, ...]
 
     Returns:
         List of dictionaries with aggregated totals and final classification.
     """
+    if isinstance(result_dict, dict):
+        result_items = [{pr_id: files_data} for pr_id, files_data in result_dict.items()]
+    else:
+        result_items = result_dict
+
     pr_classes = []
 
-    for pr_data in result_dict:
+    for pr_data in result_items:
         pr_id, files_data = next(iter(pr_data.items()))
         pr_result = {pr_id: {}}
 
@@ -112,18 +118,18 @@ def final_class(result_dict: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
         for file_name, file_result in files_data.items():
             for item in file_result['result']:
-                project = item['project']
+                project = item.get('project', project)
                 try:
                     patch_class = item['patchClass']
-                    if patch_class == CLASS_OTHER_EXT or patch_class == CLASS_CANNOT_CLASSIFY:
+                    if patch_class in (CLASS_OTHER_EXT, CLASS_CANNOT_CLASSIFY, 'OTHER EXT', 'CC'):
                         counts[CLASS_CANNOT_CLASSIFY] += 1
-                    elif patch_class == CLASS_NOT_EXISTING:
+                    elif patch_class in (CLASS_NOT_EXISTING, 'NE', 'NOT EXISTING'):
                         counts[CLASS_NOT_EXISTING] += 1
-                    elif patch_class == CLASS_PATCH_APPLIED:
+                    elif patch_class in (CLASS_PATCH_APPLIED, 'PA'):
                         counts[CLASS_PATCH_APPLIED] += 1
-                    elif patch_class == CLASS_PATCH_NOT_APPLIED:
+                    elif patch_class in (CLASS_PATCH_NOT_APPLIED, 'PN'):
                         counts[CLASS_PATCH_NOT_APPLIED] += 1
-                    elif patch_class == CLASS_ERROR:
+                    elif patch_class in (CLASS_ERROR, 'ERROR'):
                         counts[CLASS_ERROR] += 1
                 except (KeyError, ValueError):
                     counts[CLASS_ERROR] += 1
